@@ -1,0 +1,221 @@
+#!/usr/bin/env python
+
+# A sample training component that trains a simple scikit-learn decision tree model.
+# This implementation works in File mode and makes no assumptions about the input file names.
+# Input is specified as CSV with a data point in each row and the labels in the first column.
+
+from __future__ import print_function
+
+import os
+import json
+# import pickle
+import sys
+import traceback
+import csv
+
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import random
+import boto3
+from gensim.models import Word2Vec
+
+#from sklearn import tree
+from keras.models import Model
+from keras.layers import Dropout, Dense, Input, Embedding, Concatenate, Reshape, Conv2D, MaxPool2D, Flatten
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint
+from keras.utils.np_utils import to_categorical
+from keras.preprocessing import sequence
+from sklearn.model_selection import KFold
+
+# These are the paths to where SageMaker mounts interesting things in your container.
+
+prefix = '/opt/ml/'
+
+input_path = prefix + 'input/data'
+# input_path = prefix + 'input/data/training/shuffled-full-set-hashed.csv'
+output_path = os.path.join(prefix, 'output')
+model_path = os.path.join(prefix, 'model')
+# param_path = os.path.join(prefix, 'input/config/hyperparameters.json')
+
+# This algorithm has a single channel of input data called 'training'. Since we run in
+# File mode, the input files are copied to the directory specified here.
+channel_name='training'
+training_path = os.path.join(input_path, channel_name)
+
+num_classes = 14
+maxLen = 350
+sequence_length = 350
+embedding_dim = 100
+num_filters = 256
+filter_sizes = [3,4,5]
+drop = 0.5
+learning_rate = 0.0001
+
+
+def data_process(raw_data):
+    # load data
+    label = []
+    data = []
+    for row in raw_data:
+        curLabel = row[0]
+        curData = row[1].split()
+        label.append(curLabel)
+        data.append(curData)
+        
+    # get dictionary
+    dic = dict()
+    i = 0
+    for d in data:
+        for word in d:
+            if word not in dic:
+                dic[word] = i
+                i += 1
+                
+    # get text data
+    text_data = []
+    for doc in data:
+        text = []
+        for word in doc:
+            index = 0
+            if word in dic:
+                index = dic[word]
+            text.append(index)
+        text_data.append(text)
+        
+    unique_label, cat_label = np.unique(label, return_inverse=True)
+    cat_label = to_categorical(cat_label, num_classes)
+    text_data = sequence.pad_sequences(text_data, maxLen)
+    
+    return text_data, cat_label, dic, unique_label
+
+
+def build_model(vocab_size):
+    inputs = Input(shape=(sequence_length,))
+    embedding = Embedding(vocab_size + 1, embedding_dim, embeddings_initializer='uniform', trainable=True)(inputs)
+    reshape = Reshape((sequence_length,embedding_dim,1))(embedding)
+    conv_0 = Conv2D(num_filters, kernel_size=(filter_sizes[0], embedding_dim), padding='valid', kernel_initializer='normal',\
+    activation='relu')(reshape)
+    conv_1 = Conv2D(num_filters, kernel_size=(filter_sizes[1], embedding_dim), padding='valid', kernel_initializer='normal',\
+    activation='relu')(reshape)
+    conv_2 = Conv2D(num_filters, kernel_size=(filter_sizes[2], embedding_dim), padding='valid', kernel_initializer='normal',\
+    activation='relu')(reshape)
+    
+    maxpool_0 = MaxPool2D(pool_size=(sequence_length - filter_sizes[0] + 1, 1), strides=(1,1), padding='valid')(conv_0)
+    maxpool_1 = MaxPool2D(pool_size=(sequence_length - filter_sizes[1] + 1, 1), strides=(1,1), padding='valid')(conv_1)
+    maxpool_2 = MaxPool2D(pool_size=(sequence_length - filter_sizes[2] + 1, 1), strides=(1,1), padding='valid')(conv_2)
+    
+    concatenated_tensor = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2])
+    flatten = Flatten()(concatenated_tensor)
+    dropout = Dropout(drop)(flatten)
+    output = Dense(units=num_classes, activation='softmax')(dropout)
+    
+    model = Model(inputs=inputs, outputs=output)
+    adam = Adam(lr=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+    
+    model.compile(optimizer=adam, loss='categorical_crossentropy', metrics=['accuracy'])
+    return model
+
+
+def model_helper(train_data, train_label, test_data, test_label, vocab_size, unique_label):
+    epochs = 3
+    batch_size = 256
+    
+    model = build_model(vocab_size)
+    checkpoint = ModelCheckpoint(os.path.join(model_path, 'text_clas.hdf5'), monitor='val_acc', verbose=1, save_best_only=True, mode='auto')
+    
+    model.fit(train_data, train_label, batch_size=batch_size, epochs=epochs, verbose=1, callbacks=[checkpoint], validation_data=(test_data,test_label))
+    
+    # do some predicting test myself
+    truth = []
+    input = []
+    for i in range(5):
+        j = random.randint(145, 986)
+        input.append(test_data[j])
+        truth.append(test_label[j])
+        
+    input = np.array(input)
+    prediction = model.predict(input)
+    
+    index = []
+    for l in truth:
+        for i, val in enumerate(l):
+            if val == 1.:
+                index.append(unique_label[i])
+                
+    result = []
+    for l in prediction:
+        l = list(l)
+        maxIndex = l.index(max(l))
+        result.append(unique_label[maxIndex])
+        
+    print("Truth: ", index)
+    print("Prediction: ", result)
+                
+
+
+# The function to execute the training.
+def train():
+    print('Starting the training.')
+    try:
+        # input_files = [ os.path.join(training_path, file) for file in os.listdir(training_path) ]
+        # print(len(input_files))
+        # infile = input_files[0]
+        # print(infile)
+        infile = os.path.join(training_path, 'full-set.csv')
+        with open(infile) as csvfile:
+            raw_data = list(csv.reader(csvfile, delimiter=','))
+        data, label, dic, unique_label = data_process(raw_data)
+        
+        # save dictionary for future use
+        # try to save to /opt/ml/output
+        json_content = json.dumps(dic)
+        f = open(os.path.join(output_path, 'dict.json'), "w")
+        f.write(json_content)
+        f.close()
+        # try to save to s3
+        bucketName = 'sagemaker-1017'
+        infile = [os.path.join(output_path, file) for file in os.listdir(output_path)]
+        for file in infile:
+            names = file.split('.')
+            if names[-1] == 'json':
+                s3_dic = file
+        Key = os.path.join(output_path, s3_dic)
+        print(Key)
+        outPutname = 'dictionary.json'
+        s3 = boto3.client('s3')
+        s3.upload_file(Key, bucketName, outPutname)
+        
+        kf = KFold(n_splits=5)
+        i = 0
+        for train, test in kf.split(data, label):
+            X_train = data[train]
+            X_test = data[test]
+            y_train = label[train]
+            y_test = label[test]
+            classifier = model_helper(X_train, y_train, X_test, y_test, len(dic), unique_label)
+            # break
+            
+            if i >= 2:
+                break;
+            i += 1
+            
+        
+        print('Training complete.')
+    except Exception as e:
+        # Write out an error file. This will be returned as the failureReason in the
+        # DescribeTrainingJob result.
+        trc = traceback.format_exc()
+        with open(os.path.join(output_path, 'failure'), 'w') as s:
+            s.write('Exception during training: ' + str(e) + '\n' + trc)
+        # Printing this causes the exception to be in the training job logs, as well.
+        print('Exception during training: ' + str(e) + '\n' + trc, file=sys.stderr)
+        # A non-zero exit code causes the training job to be marked as Failed.
+        sys.exit(255)
+
+if __name__ == '__main__':
+    train()
+
+    # A zero exit code causes the job to be marked a Succeeded.
+    sys.exit(0)
