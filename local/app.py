@@ -4,8 +4,6 @@ import os
 import numpy as np
 import json
 
-# import HashingVectorizer from local dir
-# from vectorizer import vect
 from keras.models import Model
 from keras.layers import Dense, Dropout, Input, Embedding, Concatenate, Reshape, Conv2D, MaxPool2D, Flatten
 from keras.preprocessing import sequence
@@ -20,7 +18,7 @@ vocab_size = 1037934
 
 app = Flask(__name__)
 
-######## Preparing the Classifier
+''' Preparing the Classifier '''
 def build_model():
     inputs = Input(shape=(sequence_length,))
     # embedding = Embedding(input_dim=vocab_size, output_dim=embedding_dim, input_length=sequence_length)(inputs)
@@ -50,7 +48,6 @@ def build_model():
 
 
 cur_dir = os.path.dirname(__file__)
-# clf = pickle.load(open(os.path.join(cur_dir, 'pkl_objects', 'classifier.pkl'), 'rb'))
 clf = build_model()
 db = os.path.join(cur_dir, 'reviews.sqlite')
 
@@ -75,7 +72,6 @@ def process_data(raw):
 
 def classify(document):
     label = {0: 'negative', 1: 'positive'}
-    # X = vect.transform([document])
     X = process_data(document)
     y = clf.predict(X) # [0]
 
@@ -89,30 +85,13 @@ def classify(document):
         maxIndex = l.index(max(l))
         result.append(unique_label[maxIndex])
 
-    # modified
     first = y[0]
     topThree = sorted(zip(first, unique_label), reverse=True)[:3]
 
     return topThree
-    # return y
-
-
-# def sqlite_entry(path, document, y):
-#     conn = sqlite3.connect(path)
-#     c = conn.cursor()
-#     c.execute("INSERT INTO review_db (review, sentiment, date)"\
-#     " VALUES (?, ?, DATETIME('now'))", (document, y))
-#     conn.commit()
-#     conn.close()
-
-
-######## Flask
-'''
-class ReviewForm(Form):
-    moviereview = TextAreaField('',
-                                [validators.DataRequired(),
-                                validators.length(min=15)])
-'''
+	
+	
+''' Flask '''
 class DocumentForm(Form):
     document = TextAreaField('', [validators.DataRequired(), validators.length(min=15)])
 
@@ -130,9 +109,7 @@ def results():
     form = DocumentForm(request.form)
     if request.method == 'POST' and form.validate():
         review = request.form['document']
-        # y, proba = classify(review)
         y = classify(review)
-        # return render_template('results.html', content=review, prediction=y, probability=round(.05 * 100, 2))     modified
         return render_template('results.html', prediction=y)
     return render_template('documentin.html', form=form)
 
