@@ -195,12 +195,12 @@ def train():
             y_train = label[train]
             y_test = label[test]
             classifier = model_helper(X_train, y_train, X_test, y_test, len(dic), unique_label)
-            # break
-            
+            break
+            '''
             if i >= 2:
                 break;
             i += 1
-            
+            '''
         
         print('Training complete.')
     except Exception as e:
