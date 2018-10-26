@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Document Classification</title>
+	<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+
+<h3>Prediction:</h3>
+<div>This document is <strong>{{ prediction }}</strong>.</div>
+
+<div id='button'>
+	  <form action="/">
+	    <input type=submit value='Submit another document'>
+	  </form>
+</div>
+
+  </body>
+</html>
