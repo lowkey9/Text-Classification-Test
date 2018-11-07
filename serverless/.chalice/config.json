@@ -8,6 +8,6 @@
   "app_name": "predictor",
   "autogen_policy": false,
   "environment_variables": {
-    "ENDPOINT_NAME": "text-classfication-test-2018-11-06-16-28-25-618"
+    "ENDPOINT_NAME": "text-classfication-test-2018-11-07-14-42-52-642"
   }
 }
